@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from . import schemas
-from .ingestion import ingest_pdf, list_documents, delete_document
+from .ingestion import ingest_pdf_stream, list_documents, delete_document
 from .rag_engine import process_query
 
 app = FastAPI(
@@ -20,20 +20,18 @@ app.add_middleware(
 )
 
 
-@app.post("/upload/", response_model=schemas.UploadResponse)
+@app.post("/upload/")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Upload and process a PDF for RAG."""
+    """Upload and process a PDF for RAG with real-time SSE progress streaming."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
     try:
         file_bytes = await file.read()
-        result = ingest_pdf(file_bytes, file.filename)
-        return schemas.UploadResponse(
-            message="Document processed successfully.",
-            file_name=file.filename,
-            chunks_created=result["chunks_created"],
-            pages_processed=result["pages_processed"],
+        return StreamingResponse(
+            ingest_pdf_stream(file_bytes, file.filename),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
     except Exception as e:
         raise HTTPException(

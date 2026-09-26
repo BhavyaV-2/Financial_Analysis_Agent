@@ -232,9 +232,17 @@ Two dimensions:
 
 PyPDFLoader extracts tables as plain text, which mostly preserves the structure for simple tables. For complex nested tables, the text extraction can be messy. The fix would be adding Camelot or Tabula for structured table extraction, but that's a v3 enhancement.
 
-### "How do you handle very large PDFs (500+ pages)?"
+### "How do you handle very large PDFs (400+ pages)?"
 
-ChromaDB handles it fine — the chunks are stored individually, not as one blob. The concern is embedding time: 500 pages might produce 1000+ chunks. MiniLM encodes those in ~10 seconds on CPU. The upload is synchronous now; for production, I'd make it async with a progress webhook.
+A 400+ page document produces 1,000+ chunks and takes 30-60 seconds to process. A standard blocking HTTP POST would make users think the app froze or risk gateway timeouts.
+
+I solved this by making the `/upload/` endpoint stream real-time Server-Sent Events (SSE):
+1. **Upfront page count**: Using `pypdf.PdfReader` to count total pages in milliseconds.
+2. **Page-by-page scan**: Emitting progress updates every 5% of pages read (`Stage 1: Scan & Read`).
+3. **Chunking feedback**: Reporting chunk counts and overlap boundaries (`Stage 2: Chunk Text`).
+4. **Batched embeddings**: MiniLM encodes chunks in batches of 64 on CPU, emitting live chunk counts and batch numbers (`Stage 3: Generate Vectors`).
+5. **ChromaDB insertion**: Inserting in batches of 100 with live vector count indicators (`Stage 4: Save to ChromaDB`).
+6. **Frontend UI**: A live percentage progress bar with an interactive stepper keeps the user informed throughout the entire process.
 
 ### "What if the user uploads multiple documents?"
 

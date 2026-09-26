@@ -101,7 +101,7 @@ The frontend runs on `http://localhost:3000`.
 
 | Method | Endpoint | Description |
 |:---|:---|:---|
-| `POST` | `/upload/` | Upload a PDF → returns chunk count and page count |
+| `POST` | `/upload/` | Upload a PDF → real-time SSE progress stream (scan, chunk, batch embed, index) for 400+ page reports |
 | `POST` | `/chat/` | Send a question → SSE streaming response |
 | `GET` | `/documents/` | List all indexed documents |
 | `DELETE` | `/documents/{filename}` | Remove a document and its embeddings |
