@@ -1,148 +1,367 @@
-// frontend/app/page.tsx
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { PDFUploader } from '@/components/pdf-uploader';
-import { WelcomeScreen } from '@/components/welcome-screen';
-import { ChatMessage, ChatMessageProps } from '@/components/chat-message';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Send, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import axios from 'axios';
 import TextareaAutosize from 'react-textarea-autosize';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { ChatMessage } from '@/components/chat-message';
+import { WelcomeScreen } from '@/components/welcome-screen';
+import { DocumentManager } from '@/components/document-manager';
+import { UploadDropzone } from '@/components/upload-dropzone';
 
-// --- PRE-MADE PROMPTS ---
+const API_BASE = 'http://127.0.0.1:8000';
+
+interface Message {
+  role: 'user' | 'assistant';
+  content: string;
+  sources?: Array<{
+    page: number;
+    snippet: string;
+    score: number;
+    source: string;
+  }>;
+  isStreaming?: boolean;
+}
+
 const examplePrompts = [
   'Summarize the key financial highlights of the report.',
-  'What are the main risks mentioned for the company?',
-  'Provide an overview of the revenue and net income for the last fiscal year.',
-  'Compare the total assets to total liabilities.',
+  'What are the main risks mentioned?',
+  'Provide a revenue and net income overview.',
+  'Compare total assets to total liabilities.',
 ];
 
 export default function Home() {
-  const [pdfProcessed, setPdfProcessed] = useState(false);
-  const [messages, setMessages] = useState<ChatMessageProps[]>([]);
+  const [activeDoc, setActiveDoc] = useState<{
+    filename: string;
+    chunks: number;
+  } | null>(null);
+  const [documents, setDocuments] = useState<
+    Array<{ filename: string; chunks: number }>
+  >([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
-  const [isThinking, setIsThinking] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll on new messages
   useEffect(() => {
-    chatContainerRef.current?.scrollTo(0, chatContainerRef.current.scrollHeight);
-  }, [messages, isThinking]);
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop =
+        chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
 
-  const handleUploadSuccess = () => {
-    setPdfProcessed(true);
+  // Load chat from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('fintrack_chat');
+    const savedDoc = localStorage.getItem('fintrack_active_doc');
+    if (saved) {
+      try {
+        setMessages(
+          JSON.parse(saved).map((m: Message) => ({ ...m, isStreaming: false }))
+        );
+      } catch {}
+    }
+    if (savedDoc) {
+      try {
+        setActiveDoc(JSON.parse(savedDoc));
+      } catch {}
+    }
+  }, []);
+
+  // Persist chat to localStorage
+  useEffect(() => {
+    if (messages.length > 0 && !messages.some((m) => m.isStreaming)) {
+      localStorage.setItem(
+        'fintrack_chat',
+        JSON.stringify(messages.map(({ isStreaming, ...rest }) => rest))
+      );
+    }
+  }, [messages]);
+
+  // Persist active doc
+  useEffect(() => {
+    if (activeDoc) {
+      localStorage.setItem('fintrack_active_doc', JSON.stringify(activeDoc));
+    }
+  }, [activeDoc]);
+
+  // Fetch documents from backend
+  const fetchDocuments = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/documents/`);
+      if (res.ok) {
+        const docs = await res.json();
+        setDocuments(docs);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
+
+  const handleUploadSuccess = (data: {
+    file_name: string;
+    chunks_created: number;
+    pages_processed: number;
+  }) => {
+    const docInfo = { filename: data.file_name, chunks: data.chunks_created };
+    setActiveDoc(docInfo);
     setMessages([]);
+    setShowUpload(false);
+    localStorage.removeItem('fintrack_chat');
+    fetchDocuments();
+  };
+
+  const handleDeleteDocument = async (filename: string) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/documents/${encodeURIComponent(filename)}`,
+        { method: 'DELETE' }
+      );
+      if (res.ok) {
+        toast.success(`Deleted "${filename}"`);
+        if (activeDoc?.filename === filename) {
+          setActiveDoc(null);
+          setMessages([]);
+          localStorage.removeItem('fintrack_chat');
+          localStorage.removeItem('fintrack_active_doc');
+        }
+        fetchDocuments();
+      }
+    } catch {
+      toast.error('Failed to delete document.');
+    }
   };
 
   const sendMessage = async (message: string) => {
-    if (!message.trim()) return;
+    if (!message.trim() || isStreaming) return;
+    setInputValue('');
+    setIsStreaming(true);
 
-    const userMessage: ChatMessageProps = { role: 'user', content: message };
-    setMessages((prev) => [...prev, userMessage]);
-    setIsThinking(true);
+    const userMsg: Message = { role: 'user', content: message };
+    const assistantMsg: Message = {
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+    };
 
-    const apiChatHistory = messages.map((msg) => ({ type: msg.role, content: msg.content }));
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+
+    // Build chat history for API (exclude current messages)
+    const apiHistory = messages.map((m) => ({
+      type: m.role === 'user' ? 'human' : 'assistant',
+      content: m.content,
+    }));
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/chat/', {
-        question: message,
-        chat_history: apiChatHistory,
+      const response = await fetch(`${API_BASE}/chat/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: message,
+          chat_history: apiHistory,
+        }),
       });
-      const assistantMessage: ChatMessageProps = { role: 'assistant', content: response.data.answer };
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error: any) {
-      toast.error('Error', { description: 'Failed to get a response from the assistant.' });
-      setMessages((prev) => prev.slice(0, -1)); // Remove the user's message on failure
+
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to get response');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'chunk') {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: last.content + data.content,
+                  };
+                }
+                return updated;
+              });
+            } else if (data.type === 'sources') {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    sources: data.content,
+                  };
+                }
+                return updated;
+              });
+            } else if (data.type === 'error') {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    content: data.content,
+                    isStreaming: false,
+                  };
+                }
+                return updated;
+              });
+            } else if (data.type === 'done') {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last && last.role === 'assistant') {
+                  updated[updated.length - 1] = {
+                    ...last,
+                    isStreaming: false,
+                  };
+                }
+                return updated;
+              });
+            }
+          } catch {}
+        }
+      }
+
+      // Ensure streaming is cleared
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last && last.role === 'assistant' && last.isStreaming) {
+          updated[updated.length - 1] = { ...last, isStreaming: false };
+        }
+        return updated;
+      });
+    } catch {
+      toast.error('Failed to get a response from the assistant.');
+      setMessages((prev) => prev.slice(0, -2));
     } finally {
-      setIsThinking(false);
+      setIsStreaming(false);
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     sendMessage(inputValue);
-    setInputValue('');
-  };
-
-  const handlePromptClick = (prompt: string) => {
-    setInputValue(prompt);
-    sendMessage(prompt);
-    setInputValue('');
   };
 
   return (
-    <div className="flex h-screen bg-muted/40">
-      <aside className="w-1/3 max-w-sm p-4 border-r bg-background">
-        <div className="flex flex-col h-full">
-          <p className="text-2xl font-bold mb-4">Fintrack</p>
-          <ThemeToggle />
-          <PDFUploader onUploadSuccess={handleUploadSuccess} />
+    <div className="flex flex-col h-screen bg-background">
+      {/* Header */}
+      <header className="flex items-center justify-between px-5 py-2.5 border-b bg-background/80 backdrop-blur-sm">
+        <div className="flex items-center gap-2">
+          <h1 className="text-base font-semibold tracking-tight">Fintrack</h1>
+          {activeDoc && (
+            <>
+              <span className="text-border">|</span>
+              <DocumentManager
+                documents={documents}
+                activeDoc={activeDoc}
+                onDelete={handleDeleteDocument}
+                onUploadClick={() => setShowUpload(true)}
+              />
+            </>
+          )}
         </div>
-      </aside>
+        <ThemeToggle />
+      </header>
 
-      <main className="flex-1 flex flex-col p-4 h-screen">
-        {!pdfProcessed ? (
-          <WelcomeScreen />
+      {/* Main content */}
+      <main className="flex-1 overflow-hidden flex flex-col">
+        {!activeDoc || showUpload ? (
+          <WelcomeScreen onUploadSuccess={handleUploadSuccess} />
         ) : (
-          <div className="flex flex-col h-full">
-            <div ref={chatContainerRef} className="flex-1 space-y-6 overflow-y-auto p-4 rounded-lg bg-background border mb-4">
-              {messages.length > 0 ? (
-                messages.map((msg, index) => <ChatMessage key={index} role={msg.role} content={msg.content} />)
-              ) : (
-                // --- RENDER PRE-MADE PROMPTS ---
+          <div className="flex flex-col h-full max-w-3xl mx-auto w-full">
+            {/* Chat messages */}
+            <div
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto px-4 py-6 space-y-5"
+            >
+              {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full">
-                  <p className="text-muted-foreground mb-4">Start the analysis with a pre-made prompt or ask your own question below.</p>
-                  {(() => {
-                    const longest = Math.max(1, ...examplePrompts.map((p) => p.length));
-                    const baseWidth = 220;
-                    const computedMaxWidth = Math.min(720, baseWidth + longest * 6); // px, caps at 720
-                    const colsClass = examplePrompts.length <= 2 ? 'grid-cols-1' : 'grid-cols-2';
-
-                    return (
-                      <div
-                        className={`grid ${colsClass} gap-4 w-full`}
-                        style={{ maxWidth: `${computedMaxWidth}px` }}
+                  <p className="text-sm text-muted-foreground mb-5">
+                    Document loaded. Ask a question or try a prompt below.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2.5 max-w-lg w-full">
+                    {examplePrompts.map((prompt) => (
+                      <Button
+                        key={prompt}
+                        variant="outline"
+                        onClick={() => sendMessage(prompt)}
+                        className="h-auto whitespace-normal text-left px-4 py-3 text-xs leading-relaxed justify-start"
                       >
-                        {examplePrompts.map((prompt) => (
-                          <Button
-                            key={prompt}
-                            variant="outline"
-                            onClick={() => handlePromptClick(prompt)}
-                            className="whitespace-normal break-words text-left p-6"
-                          >
-                            <span className="whitespace-normal break-words">{prompt}</span>
-                          </Button>
-                        ))}
-                      </div>
-                    );
-                  })()}
+                        {prompt}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                messages.map((msg, i) => (
+                  <ChatMessage
+                    key={i}
+                    role={msg.role}
+                    content={msg.content}
+                    sources={msg.sources}
+                    isStreaming={msg.isStreaming}
+                  />
+                ))
               )}
-              {isThinking && <ChatMessage role="assistant" content="Thinking..." />}
             </div>
 
-            <div className="mt-auto">
-              {/* --- AUTO-RESIZING TEXTAREA FORM --- */}
-              <form onSubmit={handleSubmit} className="flex items-center space-x-2">
+            {/* Input bar */}
+            <div className="border-t bg-background px-4 py-3">
+              <form
+                onSubmit={handleSubmit}
+                className="flex items-end gap-2 max-w-3xl mx-auto"
+              >
                 <TextareaAutosize
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="Ask a question about the document..."
-                  className="flex-1 resize-none border rounded-md p-2 text-sm"
+                  placeholder="Ask about this document..."
+                  className="flex-1 resize-none rounded-xl border bg-muted/30 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring/50 transition-shadow"
                   minRows={1}
-                  maxRows={5}
+                  maxRows={4}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       handleSubmit(e);
                     }
                   }}
-                  disabled={isThinking}
+                  disabled={isStreaming}
                 />
-                <Button type="submit" disabled={isThinking || !inputValue.trim()}>
-                  {isThinking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={isStreaming || !inputValue.trim()}
+                  className="shrink-0 h-10 w-10 rounded-xl"
+                >
+                  {isStreaming ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
                 </Button>
               </form>
             </div>

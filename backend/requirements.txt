@@ -2,12 +2,10 @@ fastapi
 uvicorn[standard]
 pydantic
 python-dotenv
-langchain
-langchain-community
+google-genai
+chromadb
 langchain-text-splitters
-langchain-huggingface
-langchain-core
-supabase==1.0.4
-pypdf
+langchain-community
 sentence-transformers
+pypdf
 python-multipart

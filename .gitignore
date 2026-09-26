@@ -1,12 +1,16 @@
 # --- General ---
 .env
-.env.*
+.env.local
+.env.*.local
 *.log
 
+
 # --- Python / Backend ---
+__pycache__/
+*.pyc
+*.pyo
 backend/venv/
-backend/__pycache__/
-backend/*.pyc
+backend/chroma_data/
 
 # --- Node.js / Frontend ---
 frontend/node_modules/

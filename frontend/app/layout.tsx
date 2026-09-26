@@ -1,4 +1,3 @@
-// frontend/app/layout.tsx
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
@@ -9,8 +8,8 @@ import { ThemeProvider } from './providers';
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
 export const metadata: Metadata = {
-  title: 'Financial Chatbot',
-  description: 'Chat with your financial reports.',
+  title: 'Fintrack — Financial Document Analyst',
+  description: 'Upload financial reports and ask questions with AI-powered RAG.',
 };
 
 export default function RootLayout({
@@ -20,8 +19,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={cn('min-h-screen bg-background font-sans antialiased', inter.variable)}>
-
+      <body
+        className={cn(
+          'min-h-screen bg-background font-sans antialiased',
+          inter.variable
+        )}
+      >
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -29,7 +32,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           {children}
-          <Toaster richColors />
+          <Toaster richColors position="bottom-right" />
         </ThemeProvider>
       </body>
     </html>

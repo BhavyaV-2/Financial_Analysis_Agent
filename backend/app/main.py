@@ -1,15 +1,15 @@
-# app/main.py
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from . import rag_service
 from . import schemas
+from .ingestion import ingest_pdf, list_documents, delete_document
+from .rag_engine import process_query
 
 app = FastAPI(
-    title="Financial Reports RAG API",
-    description="An API for processing financial reports and answering questions about them.",
+    title="Fintrack API",
+    description="Financial document RAG API with guardrails and streaming.",
 )
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,36 +19,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/upload/", response_model=schemas.UploadResponse)
 async def upload_pdf(file: UploadFile = File(...)):
-    """
-    Endpoint to upload a PDF. The file is processed and its content is
-    embedded and stored in a Supabase vector store.
-    """
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Only PDFs are allowed.")
+    """Upload and process a PDF for RAG."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
     try:
         file_bytes = await file.read()
-        rag_service.process_and_embed_pdf(file_bytes, file.filename)
+        result = ingest_pdf(file_bytes, file.filename)
         return schemas.UploadResponse(
-            message="File processed and embeddings stored successfully.",
-            file_name=file.filename
+            message="Document processed successfully.",
+            file_name=file.filename,
+            chunks_created=result["chunks_created"],
+            pages_processed=result["pages_processed"],
         )
     except Exception as e:
-        print(f"Error during PDF upload and processing: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to process document: {str(e)}"
+        )
 
 
-@app.post("/chat/", response_model=schemas.ChatResponse)
-async def chat_with_document(request: schemas.ChatRequest):
-    """
-    Endpoint to handle chat requests. It uses the existing vector store
-    to answer questions based on the uploaded document.
-    """
-    try:
-        answer = rag_service.get_answer_from_rag(request.question, request.chat_history)
-        return schemas.ChatResponse(answer=answer)
-    except Exception as e:
-        print(f"Error during chat processing: {e}")
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+@app.post("/chat/")
+async def chat(request: schemas.ChatRequest):
+    """Stream a RAG response via Server-Sent Events."""
+    return StreamingResponse(
+        process_query(request.question, request.chat_history),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+
+
+@app.get("/documents/", response_model=list[schemas.DocumentInfo])
+async def get_documents():
+    """List all ingested documents."""
+    return list_documents()
+
+
+@app.delete("/documents/{filename}")
+async def remove_document(filename: str):
+    """Delete a document and all its embeddings."""
+    success = delete_document(filename)
+    if not success:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"message": f"Document '{filename}' deleted successfully."}

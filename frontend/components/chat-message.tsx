@@ -1,4 +1,3 @@
-// frontend/components/chat-message.tsx
 'use client';
 
 import { useState } from 'react';
@@ -8,13 +7,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from './ui/button';
 import { motion } from 'framer-motion';
+import { SourceCitation } from './source-citation';
 
 export interface ChatMessageProps {
   role: 'user' | 'assistant';
   content: string;
+  sources?: Array<{
+    page: number;
+    snippet: string;
+    score: number;
+    source: string;
+  }>;
+  isStreaming?: boolean;
 }
 
-export function ChatMessage({ role, content }: ChatMessageProps) {
+export function ChatMessage({ role, content, sources, isStreaming }: ChatMessageProps) {
   const [hasCopied, setHasCopied] = useState(false);
   const isUser = role === 'user';
 
@@ -26,32 +33,71 @@ export function ChatMessage({ role, content }: ChatMessageProps) {
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
-      className={cn('flex items-start space-x-4', isUser ? 'justify-end' : '')}
+      transition={{ duration: 0.25, ease: 'easeOut' }}
+      className={cn('flex items-start gap-3', isUser ? 'justify-end' : '')}
     >
       {!isUser && (
-        <div className="shrink-0 h-8 w-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-          <Bot className="h-5 w-5" />
+        <div className="shrink-0 h-7 w-7 rounded-full bg-foreground/10 flex items-center justify-center mt-0.5">
+          <Bot className="h-4 w-4 text-foreground/70" />
         </div>
       )}
-      <div className={cn('px-4 py-2 rounded-lg max-w-2xl relative group', isUser ? 'bg-blue-500 text-white' : 'bg-muted')}>
-        <div className="prose dark:prose-invert prose-p:leading-relaxed prose-pre:p-0">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-        </div>
 
-        {!isUser && (
-          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Button variant="ghost" size="icon" onClick={handleCopy}>
-              {hasCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
+      <div
+        className={cn(
+          'px-4 py-3 rounded-2xl max-w-2xl relative group',
+          isUser
+            ? 'bg-foreground text-background rounded-br-md'
+            : 'bg-muted/60 rounded-bl-md'
+        )}
+      >
+        {isUser ? (
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{content}</p>
+        ) : (
+          <>
+            <div className="markdown-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+
+            {/* Streaming indicator */}
+            {isStreaming && (
+              <span className="inline-flex gap-1 ml-1 mt-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce [animation-delay:300ms]" />
+              </span>
+            )}
+
+            {/* Sources */}
+            {!isStreaming && sources && sources.length > 0 && (
+              <SourceCitation sources={sources} />
+            )}
+
+            {/* Copy button */}
+            {!isStreaming && content && (
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={handleCopy}
+                >
+                  {hasCopied ? (
+                    <Check className="h-3 w-3" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </div>
+
       {isUser && (
-        <div className="shrink-0 h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-          <User className="h-5 w-5" />
+        <div className="shrink-0 h-7 w-7 rounded-full bg-foreground/10 flex items-center justify-center mt-0.5">
+          <User className="h-4 w-4 text-foreground/70" />
         </div>
       )}
     </motion.div>
